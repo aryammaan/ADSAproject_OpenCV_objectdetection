@@ -4,7 +4,7 @@
 using namespace cv;
 using namespace std;
 
-#define THRESHOLD_VAlUE 127
+#define THRESHOLD_VAlUE 90
 #define KERNEL_SIZE 3
 #define SIGMA 1
 
@@ -25,20 +25,87 @@ void grayscale(Mat &image, Mat &gray_image) {
     }
 }
 
-void threshold(Mat &image, Mat &thresholded_image, int threshold_value){
+// void threshold(Mat &image, Mat &thresholded_image, int threshold_value){
 
     
-     for (int i = 0; i < image.rows; i++) {
+//      for (int i = 0; i < image.rows; i++) {
+//         for (int j = 0; j < image.cols; j++) {
+//             if (image.at<uchar>(i, j) > threshold_value) {
+//                 thresholded_image.at<uchar>(i, j) = 0;
+//             }
+//             else {
+//                 thresholded_image.at<uchar>(i, j) = 255;
+//             }
+//         }
+//     }
+// }
+
+void threshold(Mat &image, Mat &thresholded_image) 
+{
+
+    // Calculate histogram
+    int hist[256] = {0};
+    int num_pixels = image.rows * image.cols;
+    for (int i = 0; i < image.rows; i++) {
         for (int j = 0; j < image.cols; j++) {
-            if (image.at<uchar>(i, j) > threshold_value) {
-                thresholded_image.at<uchar>(i, j) = 255;
+            int intensity = (int)image.at<uchar>(i, j);
+            hist[intensity]++;
+        }
+    }
+
+    // Normalize histogram
+    double norm_hist[256] = {0};
+    for (int i = 0; i < 256; i++) {
+        norm_hist[i] = (double)hist[i] / num_pixels;
+    }
+
+    // Calculate cumulative sums
+    double cum_sum[256] = {0};
+    cum_sum[0] = norm_hist[0];
+    for (int i = 1; i < 256; i++) {
+        cum_sum[i] = cum_sum[i-1] + norm_hist[i];
+    }
+
+    // Calculate global mean intensity
+    double global_mean = 0;
+    for (int i = 0; i < 256; i++) {
+        global_mean += i * norm_hist[i];
+    }
+
+    // Calculate inter-class variance for each threshold
+    double max_variance = 0;
+    int threshold = 0;
+    for (int i = 0; i < 256; i++) {
+        double w0 = cum_sum[i];
+        double w1 = 1 - w0;
+        double mean0 = 0;
+        double mean1 = 0;
+        for (int j = 0; j <= i; j++) {
+            mean0 += j * norm_hist[j] / w0;
+        }
+        for (int j = i+1; j < 256; j++) {
+            mean1 += j * norm_hist[j] / w1;
+        }
+        double variance = w0 * w1 * pow((mean0 - mean1), 2);
+        if (variance > max_variance) {
+            max_variance = variance;
+            threshold = i;
+        }
+    }
+
+    // Threshold the image
+    for (int i = 0; i < image.rows; i++) {
+        for (int j = 0; j < image.cols; j++) {
+            if (image.at<uchar>(i, j) > threshold) {
+                thresholded_image.at<uchar>(i, j) = 0;
             }
             else {
-                thresholded_image.at<uchar>(i, j) = 0;
+                thresholded_image.at<uchar>(i, j) = 255;
             }
         }
     }
 }
+
 
 void gaussianBlur(const cv::Mat& input, cv::Mat& output, int kernel_size, double sigma)
 {
@@ -77,26 +144,81 @@ void gaussianBlur(const cv::Mat& input, cv::Mat& output, int kernel_size, double
     }
 }
 
-void detectEdges(Mat& image, vector<vector<Point>>& contours)
-{
-    // Find contours
-    vector<Vec4i> hierarchy;
-    findContours(image, contours, hierarchy, RETR_EXTERNAL, CHAIN_APPROX_SIMPLE);
+// void detectEdges(Mat& image /*, vector<vector<Point>>& contours*/)
+// {
+//     //duplicating image
+//     cv::Mat new_img(image.size(), image.type());
+//     image.copyTo(new_img);
 
-    // Draw contours
-    Mat drawing = Mat::zeros(image.size(), CV_8UC3);
-    for (size_t i = 0; i < contours.size(); i++)
-    {
-        Scalar color = Scalar(0, 255, 0); // Green color
-        drawContours(drawing, contours, i, color, 2, LINE_8, hierarchy, 0);
+//     // Find contours in the binary image
+//     std::vector<std::vector<cv::Point>> contours;
+//     cv::findContours(new_img, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+//     // Draw the contours as a series of connected lines using cv::line
+//     Mat drawing = Mat::zeros(image.size(), CV_8UC3);
+//     cv::Scalar color(0, 255, 0);  // Green color
+//     int thickness = 1;
+//     // drawing lines between each consecutive points in the counter
+//     for (size_t i = 0; i < contours.size(); i++) {
+//         for (size_t j = 0; j < contours[i].size(); j++) {
+//             Point p1 = contours[i][j];
+//             Point p2;
+//             if (j < contours[i].size() - 1) {
+//                 p2 = contours[i][j + 1];
+//             } else {
+//                 p2 = contours[i][0];
+//             }
+//             line(drawing, p1, p2, color, thickness);
+//         }
+//     }
+
+//     // Display the image with the contours
+//     imwrite("processing/contours.jpg", drawing);
+
+// }
+
+void detectEdges(Mat& image /*, vector<vector<Point>>& contours*/)
+{
+    // Apply the Sobel operator to the input image
+    Mat grad_x, grad_y;
+    Mat abs_grad_x, abs_grad_y;
+    cv::Sobel(image, grad_x, CV_16S, 1, 0, 3);
+    cv::Sobel(image, grad_y, CV_16S, 0, 1, 3);
+    cv::convertScaleAbs(grad_x, abs_grad_x);
+    cv::convertScaleAbs(grad_y, abs_grad_y);
+    Mat grad;
+    cv::addWeighted(abs_grad_x, 0.5, abs_grad_y, 0.5, 0, grad);
+
+    // Find contours in the gradient image
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(grad, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+    // Draw the contours on the gradient image
+    Mat drawing = Mat::zeros(grad.size(), CV_8UC3);
+    cv::Scalar color(0, 255, 0);  // Green color
+    int thickness = 1;
+    for (size_t i = 0; i < contours.size(); i++) {
+        for (size_t j = 0; j < contours[i].size(); j++) {
+            Point p1 = contours[i][j];
+            Point p2;
+            if (j < contours[i].size() - 1) {
+                p2 = contours[i][j + 1];
+            } else {
+                p2 = contours[i][0];
+            }
+            line(drawing, p1, p2, color, thickness);
+        }
     }
-    imwrite("processing/contours.jpg", drawing);
+
+    // Display the image with the contours
+    imwrite("processing/contours2.jpg", drawing);
 }
+
 
 int main()
 {
     // Load the image
-    Mat image = imread("../images/Marathon.jpeg");
+    Mat image = imread("../images/football1.jpeg");
 
 
     // Create a new grayscale image with the same size as the input image
@@ -113,8 +235,9 @@ int main()
     Mat thresholded_image(image.size(), CV_8UC1);
     
     //127 being in the middle of 0 to 255, so generally we threshold using that
-    threshold(gray_image, thresholded_image, THRESHOLD_VAlUE);
-    imwrite("processing/thresholded_image2.jpg", thresholded_image);
+    // threshold(gray_image, thresholded_image, THRESHOLD_VAlUE);
+    threshold(gray_image, thresholded_image);
+    imwrite("processing/thresholded_image1.jpg", thresholded_image);
 
     // Apply Gaussian blur
     Mat blurred_image(image.size(), CV_8UC1);
@@ -125,11 +248,12 @@ int main()
     Mat binary_image(image.size(), CV_8UC1);
     
     //127 being in the middle of 0 to 255, so generally we threshold using that
-    threshold(blurred_image, binary_image, THRESHOLD_VAlUE);
+    // threshold(blurred_image, binary_image, THRESHOLD_VAlUE);
+     threshold(blurred_image, binary_image);
     imwrite("processing/thresholded_image2.jpg", thresholded_image);
 
     vector<vector<Point>> contours;
-    detectEdges(binary_image, contours);
+    detectEdges(blurred_image /*, contours */);
  
    
    
